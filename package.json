@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "build:single": "tsc -b && vite build --mode single && node -e \"require('fs').copyFileSync('dist-single/index.html','marble.html')\""
+    "build:single": "tsc -b && vite build --mode single && node -e \"require('fs').copyFileSync('dist-single/index.html','marble.html')\"",
+    "build:pwa": "npm run build:single && node scripts/build-pwa.mjs",
+    "icons": "python3 scripts/make-icons.py"
   },
   "dependencies": {
     "react": "^19.3.1",
