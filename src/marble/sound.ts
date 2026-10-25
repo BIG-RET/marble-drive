@@ -12,9 +12,14 @@ let master: GainNode | null = null
 let noise: AudioBuffer | null = null
 let lastClang = -Infinity
 
-/** Create/resume the AudioContext; call from a user gesture. */
+/** Create/resume the AudioContext. Call synchronously inside a user-gesture handler. */
 export function unlockAudio(): void {
   try {
+    if (ctx && (ctx.state as string) === 'closed') {
+      ctx = null
+      master = null
+      noise = null
+    }
     if (!ctx) {
       const C = window.AudioContext ?? (window as unknown as { webkitAudioContext?: AudioCtor }).webkitAudioContext
       if (!C) return
@@ -23,15 +28,33 @@ export function unlockAudio(): void {
       master.gain.value = 0.7
       master.connect(ctx.createDynamicsCompressor()).connect(ctx.destination)
     }
-    if (ctx.state === 'suspended') void ctx.resume()
+    // 'interrupted' is an iOS Safari state (e.g. after a call or switching apps).
+    if (ctx.state !== 'running') void ctx.resume().catch(() => {})
+    // iOS: playing a tiny silent buffer inside the gesture fully unlocks output.
+    const b = ctx.createBuffer(1, 1, ctx.sampleRate)
+    const src = ctx.createBufferSource()
+    src.buffer = b
+    src.connect(ctx.destination)
+    src.start(0)
   } catch {
     ctx = null
     master = null
   }
 }
 
+/** Whether audio output is currently running (for debugging/tests). */
+export function audioState(): string {
+  return ctx ? ctx.state : 'none'
+}
+
 function ready(): { c: AudioContext; out: GainNode } | null {
-  return ctx && master && ctx.state === 'running' ? { c: ctx, out: master } : null
+  if (!ctx || !master) return null
+  if (ctx.state !== 'running') {
+    // Try to recover (allowed once the page has had a gesture); skip this sound.
+    if ((ctx.state as string) !== 'closed') void ctx.resume().catch(() => {})
+    return null
+  }
+  return { c: ctx, out: master }
 }
 
 function partial(c: AudioContext, out: AudioNode, freq: number, gain: number, t0: number, decay: number) {

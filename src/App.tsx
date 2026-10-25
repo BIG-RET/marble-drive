@@ -38,7 +38,7 @@ const ACCEL_TAU = 0.15 // s, low-pass on the projected vehicle acceleration
 const CALIBRATE_MS = 1000
 
 type PermissionCtor = { requestPermission?: () => Promise<'granted' | 'denied'> }
-type MotionStatus = 'unsupported' | 'idle' | 'active' | 'denied'
+type MotionStatus = 'unsupported' | 'insecure' | 'idle' | 'active' | 'denied'
 
 const clampDeg = (d: number) => Math.max(-MAX_TILT_DEG, Math.min(MAX_TILT_DEG, d))
 const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
@@ -48,7 +48,9 @@ const fmtWorst = (d: DriveRecord) => `${d.worstScore.toFixed(0)} @ ${fmtTime(d.w
 const fmtDepth = (depth: number) => `${Math.round(depth * 100)}%`
 
 function initialMotionStatus(): MotionStatus {
-  return typeof window !== 'undefined' && 'DeviceMotionEvent' in window ? 'idle' : 'unsupported'
+  if (typeof window === 'undefined' || !('DeviceMotionEvent' in window)) return 'unsupported'
+  if (!window.isSecureContext) return 'insecure'
+  return 'idle'
 }
 
 interface Hud {
@@ -163,7 +165,8 @@ function App() {
       const live = updateTrip(trip.current, d, hits, dt, stopped)
 
       const crossed = ringCrossed(ring.current, r, TARGET_RING_R)
-      if (soundRef.current && !stopped) {
+      // Sounds follow the marble regardless of stopped state; only the score freezes.
+      if (soundRef.current) {
         if (hits > 0) playClang(impact)
         if (crossed) playDing()
       }
@@ -239,23 +242,45 @@ function App() {
   useEffect(() => saveCompare(compare), [compare])
   useEffect(() => saveHistory(history), [history])
 
-  const enableMotion = useCallback(async () => {
+  // Sensor permission. Must start synchronously inside a user gesture: both iOS
+  // requestPermission() calls are issued before any await.
+  const motionAsked = useRef(false)
+  const enableMotion = useCallback(() => {
     unlockAudio()
-    try {
-      // iOS 13+: both must be requested from a user gesture.
-      for (const Ctor of [window.DeviceMotionEvent, window.DeviceOrientationEvent] as PermissionCtor[]) {
-        if (Ctor && typeof Ctor.requestPermission === 'function') {
-          if ((await Ctor.requestPermission()) !== 'granted') {
-            setMotion('denied')
-            return
-          }
-        }
-      }
-      setMotion('active')
-    } catch {
-      setMotion('denied')
+    motionAsked.current = true
+    if (!('DeviceMotionEvent' in window)) return setMotion('unsupported')
+    if (!window.isSecureContext) return setMotion('insecure')
+    const ctors = [window.DeviceMotionEvent, window.DeviceOrientationEvent] as PermissionCtor[]
+    const asks = ctors.filter((C) => C && typeof C.requestPermission === 'function').map((C) => C.requestPermission!())
+    if (asks.length) {
+      // iOS Safari: shows the Allow/Deny dialog.
+      Promise.all(asks)
+        .then((r) => setMotion(r.every((x) => x === 'granted') ? 'active' : 'denied'))
+        .catch(() => setMotion('denied'))
+      return
     }
+    // Android / desktop: no prompt API; check the Permissions API if present.
+    const perms = navigator.permissions
+    if (perms?.query) {
+      Promise.all(
+        (['accelerometer', 'gyroscope'] as const).map((n) =>
+          perms.query({ name: n as PermissionName }).then((r) => r.state, () => 'granted'),
+        ),
+      ).then((st) => setMotion(st.includes('denied') ? 'denied' : 'active'))
+      return
+    }
+    setMotion('active')
   }, [])
+
+  // First tap/click anywhere on the page asks once (and unlocks audio).
+  useEffect(() => {
+    const first = () => {
+      unlockAudio()
+      if (!motionAsked.current) enableMotion()
+    }
+    window.addEventListener('pointerdown', first, { once: true, capture: true })
+    return () => window.removeEventListener('pointerdown', first, { capture: true })
+  }, [enableMotion])
 
   const resetMarble = () => {
     marble.current = createMarble()
@@ -467,9 +492,9 @@ function App() {
         </button>
 
         <div className="buttons">
-          {motion === 'idle' && (
+          {(motion === 'idle' || motion === 'denied') && (
             <button type="button" className="primary" onClick={enableMotion}>
-              Enable motion
+              {motion === 'denied' ? 'Retry motion' : 'Enable motion'}
             </button>
           )}
           <button type="button" onClick={toggleTrip}>
@@ -495,10 +520,21 @@ function App() {
           )}
         </div>
 
+        <p className="hint motion-status">
+          {motion === 'active'
+            ? 'Motion: allowed'
+            : motion === 'denied'
+              ? 'Motion: denied, enable it in browser settings'
+              : motion === 'insecure'
+                ? 'Motion: needs HTTPS'
+                : motion === 'unsupported'
+                  ? 'Motion: not available on this device'
+                  : 'Motion: tap anywhere to allow'}
+        </p>
         <p className="hint">
           {motion === 'denied'
             ? 'Motion permission denied — drag the bowl to tilt it.'
-            : motion === 'unsupported'
+            : motion === 'unsupported' || motion === 'insecure'
               ? 'No motion sensors — drag the bowl to tilt it.'
               : calibrated
                 ? 'Drive smoothly: keep the marble near the centre. Braking rolls it forward, turns roll it outward.'
