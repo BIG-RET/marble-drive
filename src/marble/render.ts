@@ -32,6 +32,9 @@ function ellipseAt(ctx: CanvasRenderingContext2D, v: View, r: number, z: number)
   ctx.ellipse(x, y, r * v.s, r * v.s * KY, 0, 0, Math.PI * 2)
 }
 
+/** Radius of the dotted target ring (d = 0.5). */
+export const TARGET_RING_R = RIM_RADIUS * 0.5
+
 export function draw(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -105,7 +108,7 @@ export function draw(
   // Target rings (d = 0.5) and centre mark.
   ctx.setLineDash([4, 5])
   ctx.strokeStyle = 'rgba(20,90,60,0.45)'
-  const rh = RIM_RADIUS * 0.5
+  const rh = TARGET_RING_R
   ellipseAt(ctx, v, rh, surfaceHeight(rh, 0, bowlRadius))
   ctx.stroke()
   ctx.setLineDash([])

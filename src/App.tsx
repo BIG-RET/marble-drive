@@ -9,9 +9,25 @@ import {
   type Tilt,
   type Vec3,
 } from './marble/physics'
-import { draw } from './marble/render'
+import { TARGET_RING_R, draw } from './marble/render'
 import { createTrip, grade, tripScore, updateTrip } from './marble/score'
 import { buildFrame, vehicleAccel, type Frame } from './marble/sensors'
+import { createStopDetector, feedMotion, isStopped } from './marble/stop'
+import { playClang, playDing, ringCrossed, unlockAudio, type RingState } from './marble/sound'
+import {
+  loadActiveBaseline,
+  loadBaselines,
+  loadCompare,
+  newId,
+  recordFromTrip,
+  saveActiveBaseline,
+  saveBaselines,
+  saveCompare,
+  storagePersistent,
+  type Baseline,
+  type DriveRecord,
+} from './marble/baseline'
+import { HISTORY_MIN_TIME, addDrive, loadHistory, saveHistory } from './marble/history'
 import './App.css'
 
 const MAX_TILT_DEG = 25
@@ -26,6 +42,10 @@ type MotionStatus = 'unsupported' | 'idle' | 'active' | 'denied'
 
 const clampDeg = (d: number) => Math.max(-MAX_TILT_DEG, Math.min(MAX_TILT_DEG, d))
 const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
+const fmtDate = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
+const fmtDiff = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '±0')
+const fmtWorst = (d: DriveRecord) => `${d.worstScore.toFixed(0)} @ ${fmtTime(d.worstTime)}`
+const fmtDepth = (depth: number) => `${Math.round(depth * 100)}%`
 
 function initialMotionStatus(): MotionStatus {
   return typeof window !== 'undefined' && 'DeviceMotionEvent' in window ? 'idle' : 'unsupported'
@@ -40,6 +60,7 @@ interface Hud {
   live: number
   trip: number | null
   running: boolean
+  stopped: boolean
   time: number
   rimHits: number
   worstScore: number
@@ -59,6 +80,8 @@ function App() {
   const frameRef = useRef<Frame | null>(null)
   const accel = useRef<Vec3>([0, 0, 0]) // filtered vehicle accel, dish frame
   const samples = useRef<Vec3[] | null>(null)
+  const stopDet = useRef(createStopDetector())
+  const ring = useRef<RingState>({ inside: null })
 
   const [motion, setMotion] = useState<MotionStatus>(initialMotionStatus)
   const [calibrating, setCalibrating] = useState(false)
@@ -69,7 +92,20 @@ function App() {
   useEffect(() => {
     depthRef.current = depth
   }, [depth])
+  const [soundOn, setSoundOn] = useState(true)
+  const soundRef = useRef(soundOn)
+  useEffect(() => {
+    soundRef.current = soundOn
+  }, [soundOn])
   const [hud, setHud] = useState<Hud | null>(null)
+
+  const [lastDrive, setLastDrive] = useState<DriveRecord | null>(null)
+  const [baselines, setBaselines] = useState<Baseline[]>(loadBaselines)
+  const [activeId, setActiveId] = useState<string | null>(loadActiveBaseline)
+  const [compare, setCompare] = useState<boolean>(loadCompare)
+  const [history, setHistory] = useState<DriveRecord[]>(loadHistory)
+  const [picked, setPicked] = useState<string[]>([])
+  const activeBaseline = baselines.find((b) => b.id === activeId) ?? null
 
   // Animation loop.
   useEffect(() => {
@@ -116,11 +152,21 @@ function App() {
         g[1] -= accel.current[1]
       }
 
+      // Drag/test mode: dragging = moving, not dragging = stopped.
+      const stopped = drag.current ? false : f ? isStopped(stopDet.current, now) : true
+
       const bowlRadius = bowlRadiusFor(depthRef.current)
       const m = marble.current
-      const hits = step(m, g, dt, bowlRadius)
-      const d = Math.min(1, Math.hypot(m.x, m.y) / MAX_R)
-      const live = updateTrip(trip.current, d, hits, dt)
+      const { hits, impact } = step(m, g, dt, bowlRadius)
+      const r = Math.hypot(m.x, m.y)
+      const d = Math.min(1, r / MAX_R)
+      const live = updateTrip(trip.current, d, hits, dt, stopped)
+
+      const crossed = ringCrossed(ring.current, r, TARGET_RING_R)
+      if (soundRef.current && !stopped) {
+        if (hits > 0) playClang(impact)
+        if (crossed) playDing()
+      }
 
       draw(ctx, canvas.clientWidth, canvas.clientHeight, m, bowlRadius, [g[0], g[1]])
 
@@ -138,6 +184,7 @@ function App() {
           live,
           trip: tripScore(t),
           running: t.running,
+          stopped,
           time: t.time,
           rimHits: t.rimHits,
           worstScore: t.worstScore,
@@ -163,6 +210,10 @@ function App() {
       const v: Vec3 = [a.x, a.y, a.z]
       rawAccel.current = v
       samples.current?.push(v)
+      const rr = e.rotationRate
+      const gyro =
+        rr?.alpha != null && rr.beta != null && rr.gamma != null ? Math.hypot(rr.alpha, rr.beta, rr.gamma) : null
+      feedMotion(stopDet.current, performance.now(), v, gyro)
     }
     const onOrient = (e: DeviceOrientationEvent) => {
       if (e.beta == null || e.gamma == null) return
@@ -182,7 +233,14 @@ function App() {
     if (f) frameRef.current = buildFrame(f.baseline, orientation.current, invert)
   }, [invert])
 
+  // Persist saved drives.
+  useEffect(() => saveBaselines(baselines), [baselines])
+  useEffect(() => saveActiveBaseline(activeId), [activeId])
+  useEffect(() => saveCompare(compare), [compare])
+  useEffect(() => saveHistory(history), [history])
+
   const enableMotion = useCallback(async () => {
+    unlockAudio()
     try {
       // iOS 13+: both must be requested from a user gesture.
       for (const Ctor of [window.DeviceMotionEvent, window.DeviceOrientationEvent] as PermissionCtor[]) {
@@ -203,9 +261,11 @@ function App() {
     marble.current = createMarble()
     target.current = { x: 0, y: 0 }
     tilt.current = { x: 0, y: 0 }
+    ring.current = { inside: null }
   }
 
   const setFlat = useCallback(() => {
+    unlockAudio()
     samples.current = []
     setCalibrating(true)
     window.setTimeout(() => {
@@ -226,6 +286,7 @@ function App() {
       accel.current = [0, 0, 0]
       resetMarble()
       trip.current = createTrip(true)
+      setLastDrive(null)
       setCalibrated(true)
     }, CALIBRATE_MS)
   }, [invert])
@@ -236,9 +297,60 @@ function App() {
   }
 
   const toggleTrip = () => {
+    unlockAudio()
     const t = trip.current
-    if (t.running) t.running = false
-    else trip.current = createTrip(true)
+    if (t.running) {
+      t.running = false
+      const rec = recordFromTrip(t, depthRef.current)
+      setLastDrive(rec)
+      if (rec && rec.activeTime > HISTORY_MIN_TIME) setHistory((h) => addDrive(h, rec))
+    } else {
+      trip.current = createTrip(true)
+      setLastDrive(null)
+    }
+  }
+
+  const toggleSound = (on: boolean) => {
+    if (on) unlockAudio()
+    setSoundOn(on)
+  }
+
+  // Baselines.
+  const addBaseline = (rec: DriveRecord) => {
+    const name = prompt('Baseline name', `Drive ${fmtDate(rec.date)}`)?.trim()
+    if (!name) return
+    const b: Baseline = { ...rec, id: newId(), name }
+    setBaselines((list) => [...list, b])
+    setActiveId(b.id)
+  }
+
+  const renameBaseline = () => {
+    if (!activeBaseline) return
+    const name = prompt('Rename baseline', activeBaseline.name)?.trim()
+    if (!name) return
+    setBaselines((list) => list.map((b) => (b.id === activeBaseline.id ? { ...b, name } : b)))
+  }
+
+  const deleteBaseline = () => {
+    if (!activeBaseline || !confirm(`Delete baseline “${activeBaseline.name}”?`)) return
+    const rest = baselines.filter((b) => b.id !== activeBaseline.id)
+    setBaselines(rest)
+    setActiveId(rest[0]?.id ?? null)
+  }
+
+  // History.
+  const deleteDrive = (id: string) => {
+    setHistory((h) => h.filter((d) => d.id !== id))
+    setPicked((p) => p.filter((x) => x !== id))
+  }
+
+  const togglePick = (id: string, on: boolean) =>
+    setPicked((p) => (on ? [...p.filter((x) => x !== id), id].slice(-2) : p.filter((x) => x !== id)))
+
+  const clearHistory = () => {
+    if (!confirm('Clear all drive history?')) return
+    setHistory([])
+    setPicked([])
   }
 
   // Drag-to-tilt: displacement from the press point maps to tilt.
@@ -249,6 +361,7 @@ function App() {
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (drag.current) return
+    unlockAudio()
     e.currentTarget.setPointerCapture(e.pointerId)
     drag.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY }
   }
@@ -268,6 +381,7 @@ function App() {
   }
 
   const score = hud?.trip ?? null
+  const pickedDrives = history.filter((d) => picked.includes(d.id)).sort((a, b) => a.date - b.date)
 
   return (
     <main className="app">
@@ -279,7 +393,20 @@ function App() {
           <div className="score-value">{score == null ? '––' : score.toFixed(1)}</div>
           <div className="score-label">
             Trip score {hud?.running ? `· ${fmtTime(hud.time)}` : '· stopped'}
+            {hud?.running && hud.stopped && <span className="held">Stopped, score held</span>}
           </div>
+          {compare && activeBaseline && score != null && hud && (
+            <div className="compare">
+              {hud.running ? 'Trip' : 'Final'} {Math.round(score)} vs Baseline {Math.round(activeBaseline.score)} (
+              {fmtDiff(Math.round(score) - Math.round(activeBaseline.score))}) · Rim hits {hud.rimHits} vs{' '}
+              {activeBaseline.rimHits} ({fmtDiff(hud.rimHits - activeBaseline.rimHits)})
+              {Math.abs(activeBaseline.depth - depth) > 0.005 && (
+                <div className="warn">
+                  ⚠ Baseline curvature {fmtDepth(activeBaseline.depth)} ≠ current {fmtDepth(depth)}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <dl className="score-stats">
           <dt>Live</dt>
@@ -351,6 +478,15 @@ function App() {
           <button type="button" onClick={reset}>
             Reset
           </button>
+          {lastDrive && !hud?.running && (
+            <button type="button" onClick={() => addBaseline(lastDrive)}>
+              Save as baseline
+            </button>
+          )}
+          <label className="check">
+            <input type="checkbox" checked={soundOn} onChange={(e) => toggleSound(e.target.checked)} />
+            Sound
+          </label>
           {calibrated && (
             <label className="check">
               <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} />
@@ -368,6 +504,107 @@ function App() {
                 ? 'Drive smoothly: keep the marble near the centre. Braking rolls it forward, turns roll it outward.'
                 : 'Mount the phone, stop the car, then tap Set flat. Or drag the bowl to try it.'}
         </p>
+
+        <details className="drives">
+          <summary>Baselines &amp; history</summary>
+          {!storagePersistent() && <p className="note">Storage unavailable — drives are kept until the page closes.</p>}
+
+          <div className="row">
+            <select
+              value={activeBaseline?.id ?? ''}
+              onChange={(e) => setActiveId(e.target.value || null)}
+              aria-label="Active baseline"
+            >
+              {baselines.length === 0 && <option value="">No baselines</option>}
+              {baselines.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name} — {b.score.toFixed(0)} {b.grade}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={renameBaseline} disabled={!activeBaseline}>
+              Rename
+            </button>
+            <button type="button" onClick={deleteBaseline} disabled={!activeBaseline}>
+              Delete
+            </button>
+            <label className="check">
+              <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} />
+              Compare to baseline
+            </label>
+          </div>
+
+          <div className="row">
+            <strong>History</strong>
+            <button type="button" onClick={clearHistory} disabled={history.length === 0}>
+              Clear history
+            </button>
+          </div>
+
+          {pickedDrives.length === 2 && (
+            <table className="side">
+              <thead>
+                <tr>
+                  <th />
+                  <th>{fmtDate(pickedDrives[0].date)}</th>
+                  <th>{fmtDate(pickedDrives[1].date)}</th>
+                  <th>Δ</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th>Score</th>
+                  <td>{pickedDrives[0].score.toFixed(0)}</td>
+                  <td>{pickedDrives[1].score.toFixed(0)}</td>
+                  <td>{fmtDiff(Math.round(pickedDrives[1].score) - Math.round(pickedDrives[0].score))}</td>
+                </tr>
+                <tr>
+                  <th>Rim hits</th>
+                  <td>{pickedDrives[0].rimHits}</td>
+                  <td>{pickedDrives[1].rimHits}</td>
+                  <td>{fmtDiff(pickedDrives[1].rimHits - pickedDrives[0].rimHits)}</td>
+                </tr>
+                <tr>
+                  <th>Worst</th>
+                  <td>{fmtWorst(pickedDrives[0])}</td>
+                  <td>{fmtWorst(pickedDrives[1])}</td>
+                  <td>
+                    {fmtDiff(Math.round(pickedDrives[1].worstScore) - Math.round(pickedDrives[0].worstScore))}
+                  </td>
+                </tr>
+                <tr>
+                  <th>Time</th>
+                  <td>{fmtTime(pickedDrives[0].activeTime)}</td>
+                  <td>{fmtTime(pickedDrives[1].activeTime)}</td>
+                  <td>{fmtDiff(Math.round(pickedDrives[1].activeTime - pickedDrives[0].activeTime))} s</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+
+          <ul className="history">
+            {history.length === 0 && <li className="note">No drives yet (trips over {HISTORY_MIN_TIME} s are saved).</li>}
+            {history.map((d) => (
+              <li key={d.id}>
+                <input
+                  type="checkbox"
+                  checked={picked.includes(d.id)}
+                  onChange={(e) => togglePick(d.id, e.target.checked)}
+                  aria-label="Pick for comparison"
+                />
+                <span className="when">{fmtDate(d.date)}</span>
+                <span className="num">{d.score.toFixed(0)}</span>
+                <span className={`chip grade-${d.grade}`}>{d.grade}</span>
+                <button type="button" onClick={() => addBaseline(d)}>
+                  Make baseline
+                </button>
+                <button type="button" onClick={() => deleteDrive(d.id)}>
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
       </footer>
     </main>
   )

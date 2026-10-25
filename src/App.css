@@ -155,3 +155,95 @@ button.big {
   color: var(--text-dim);
   text-align: center;
 }
+
+.held {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #3b3f4a;
+  color: #facc15;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.compare {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.compare .warn {
+  color: #fb923c;
+}
+
+.drives {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.drives summary {
+  cursor: pointer;
+}
+.drives[open] {
+  max-height: 40dvh;
+  overflow: auto;
+}
+.drives .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.drives button,
+.drives select {
+  font: inherit;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+.drives select {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.drives .note {
+  margin: 4px 0;
+  font-size: 12px;
+}
+.history {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.history li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.history .when {
+  flex: 1;
+}
+.history .num {
+  font-family: var(--mono);
+}
+.chip {
+  min-width: 20px;
+  text-align: center;
+  border-radius: 6px;
+  color: #0d1117;
+  font-weight: 700;
+}
+.side {
+  margin-top: 6px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.side th,
+.side td {
+  padding: 2px 8px;
+  text-align: right;
+}
+.side tbody th {
+  text-align: left;
+}

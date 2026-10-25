@@ -4,6 +4,9 @@
 //   rimPenalty = 25 · max(0, 1 - tSinceHit / 1s) (linear decay after each rim hit)
 //   live       = clamp(100 · (1 - d²) - rimPenalty, 0, 100)
 //   trip       = Σ live·dt / Σ dt                (time-weighted mean while running)
+//
+// While the car is stopped everything is frozen: live and trip hold their last
+// values, and no time, rim hits or worst moment are recorded.
 
 export const RIM_PENALTY = 25
 export const RIM_PENALTY_DECAY = 1 // seconds
@@ -16,6 +19,7 @@ export interface Trip {
   worstScore: number
   worstTime: number
   lastHitAge: number
+  lastLive: number
 }
 
 export function createTrip(running = false): Trip {
@@ -27,6 +31,7 @@ export function createTrip(running = false): Trip {
     worstScore: 100,
     worstTime: 0,
     lastHitAge: Infinity,
+    lastLive: 100,
   }
 }
 
@@ -35,8 +40,9 @@ export function liveScore(d: number, lastHitAge: number): number {
   return Math.min(100, Math.max(0, 100 * (1 - d * d) - penalty))
 }
 
-/** Advance by dt; returns the live score for this frame. */
-export function updateTrip(t: Trip, d: number, hits: number, dt: number): number {
+/** Advance by dt; returns the live score for this frame (held while stopped). */
+export function updateTrip(t: Trip, d: number, hits: number, dt: number, stopped = false): number {
+  if (stopped) return t.lastLive
   t.lastHitAge = hits > 0 ? 0 : t.lastHitAge + dt
   const live = liveScore(d, t.lastHitAge)
   if (t.running && dt > 0) {
@@ -48,6 +54,7 @@ export function updateTrip(t: Trip, d: number, hits: number, dt: number): number
       t.worstTime = t.time
     }
   }
+  t.lastLive = live
   return live
 }
 

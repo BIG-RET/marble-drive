@@ -78,8 +78,8 @@ export function tiltGravity(tilt: Tilt): Vec3 {
   return [G * sx, G * cx * sy, -G * cx * cy]
 }
 
-/** Returns true if this substep produced a rim impact hard enough to count. */
-function substep(m: MarbleState, g: Vec3, dt: number, bowlRadius: number): boolean {
+/** Returns the normal impact speed if this substep produced a counted rim hit, else 0. */
+function substep(m: MarbleState, g: Vec3, dt: number, bowlRadius: number): number {
   const p = bowlRadius - MARBLE_RADIUS
   // Inward surface normal at the marble's position (points at sphere centre).
   const cz = centreHeight(m.x, m.y, bowlRadius) - MARBLE_RADIUS
@@ -140,23 +140,35 @@ function substep(m: MarbleState, g: Vec3, dt: number, bowlRadius: number): boole
       const ty = m.vy - vn * uy
       m.vx = tx * RIM_FRICTION - vn * RESTITUTION * ux
       m.vy = ty * RIM_FRICTION - vn * RESTITUTION * uy
-      return vn > HIT_SPEED
+      return vn > HIT_SPEED ? vn : 0
     }
   }
-  return false
+  return 0
+}
+
+export interface StepResult {
+  /** Number of counted rim hits during the step. */
+  hits: number
+  /** Largest counted impact speed (m/s), 0 if none. */
+  impact: number
 }
 
 /**
  * Advance the simulation by `dt` seconds under effective gravity `g` (dish
- * frame). Returns the number of counted rim hits during the step.
+ * frame).
  */
-export function step(m: MarbleState, g: Vec3, dt: number, bowlRadius: number): number {
+export function step(m: MarbleState, g: Vec3, dt: number, bowlRadius: number): StepResult {
   let hits = 0
+  let impact = 0
   let remaining = Math.min(dt, 0.1) // avoid a huge jump after a background tab
   while (remaining > 1e-9) {
     const h = Math.min(SUBSTEP, remaining)
-    if (substep(m, g, h, bowlRadius)) hits++
+    const vn = substep(m, g, h, bowlRadius)
+    if (vn > 0) {
+      hits++
+      impact = Math.max(impact, vn)
+    }
     remaining -= h
   }
-  return hits
+  return { hits, impact }
 }
