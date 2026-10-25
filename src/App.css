@@ -1,0 +1,157 @@
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  height: 100dvh;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: max(8px, env(safe-area-inset-top)) 12px max(8px, env(safe-area-inset-bottom));
+  gap: 8px;
+  user-select: none;
+}
+
+.scoreboard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.grade {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 44px;
+  font-weight: 800;
+  color: #0d1117;
+  background: #555;
+  flex: none;
+}
+.grade-A { background: #3ddc84; }
+.grade-B { background: #a3e635; }
+.grade-C { background: #facc15; }
+.grade-D { background: #fb923c; }
+.grade-F { background: #f87171; }
+
+.score-main {
+  flex: 1;
+}
+.score-value {
+  font-size: 52px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.score-label {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.score-stats,
+.hud dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 13px;
+}
+.score-stats dt,
+.hud dt {
+  color: var(--text-dim);
+}
+.score-stats dd,
+.hud dd {
+  margin: 0;
+  font-family: var(--mono);
+  text-align: right;
+}
+
+.stage {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  touch-action: none;
+  cursor: grab;
+}
+.stage:active {
+  cursor: grabbing;
+}
+
+.hud dl {
+  grid-template-columns: repeat(3, auto auto);
+  justify-content: center;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.slider input {
+  flex: 1;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06121f;
+  font-weight: 600;
+}
+button.big {
+  font-size: 22px;
+  font-weight: 700;
+  padding: 16px;
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.buttons button {
+  flex: 1;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+}
